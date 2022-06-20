@@ -162,9 +162,9 @@ void wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MAX_MODEM));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(4 * 2)); // 2 mA (in units of 0.25 mA)
+    // ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(4 * 2)); // 2 mA (in units of 0.25 mA)
 
     ESP_LOGI(__func__, "wifi_init_sta finished.");
 }

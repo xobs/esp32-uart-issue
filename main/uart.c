@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "driver/periph_ctrl.h"
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "freertos/semphr.h"
 #include "hal/uart_hal.h"
@@ -18,9 +19,6 @@
 
 #include "lwip/sockets.h"
 
-uint32_t uart_rx_data_relay;
-
-#include "driver/gpio.h"
 #define DEFAULT_UART_MASK UART_RXFIFO_FULL_INT_ENA_M | UART_FRM_ERR_INT_ENA_M | UART_RXFIFO_OVF_INT_ENA_M
 static int uart_mode = 0;
 static const uint32_t bulk_mode_size = 126;
@@ -41,12 +39,6 @@ static const uint32_t bulk_mode_size = 126;
 #error "No target UART defined"
 #endif
 
-#define UHCI_INDEX 0
-
-static struct sockaddr_in udp_peer_addr;
-static int tcp_serv_sock;
-static int udp_serv_sock;
-static int tcp_client_sock = 0;
 static uart_isr_handle_t console_isr_handle;
 
 // UART statistics counters
@@ -57,17 +49,17 @@ uint32_t uart_rx_count;
 uint32_t uart_tx_count;
 uint32_t uart_irq_count;
 
-#define UART_CONTEX_INIT_DEF(uart_num)                                                                                 \
-	{                                                                                                              \
-		.hal.dev = UART_LL_GET_HW(uart_num), .spinlock = portMUX_INITIALIZER_UNLOCKED, .hw_enabled = false,    \
+#define UART_CONTEX_INIT_DEF(uart_num)                                                                      \
+	{                                                                                                       \
+		.hal.dev = UART_LL_GET_HW(uart_num), .spinlock = portMUX_INITIALIZER_UNLOCKED, .hw_enabled = false, \
 	}
 
-typedef struct {
+typedef struct
+{
 	uart_hal_context_t hal; /*!< UART hal context*/
 	portMUX_TYPE spinlock;
 	bool hw_enabled;
 } uart_context_t;
-
 
 static uart_context_t uart_context[UART_NUM_MAX] = {
 	UART_CONTEX_INIT_DEF(UART_NUM_0),
@@ -82,7 +74,8 @@ static uart_context_t uart_context[UART_NUM_MAX] = {
 #define UART_ENTER_CRITICAL(mux) portENTER_CRITICAL(mux)
 #define UART_EXIT_CRITICAL(mux) portEXIT_CRITICAL(mux)
 
-struct {
+struct
+{
 	volatile uint16_t m_get_idx;
 	volatile uint16_t m_put_idx;
 	uint8_t m_entry[16384];
@@ -94,15 +87,19 @@ void IRAM_ATTR uart_write_all(const uint8_t *data, int len)
 #ifdef UART_USE_DMA_WRITE
 	uart_dma_write(UHCI_INDEX, data, len);
 #else
-	while (len > 0) {
-		while (!uart_ll_is_tx_idle(&TARGET_UART_DEV)) {
+	while (len > 0)
+	{
+		while (!uart_ll_is_tx_idle(&TARGET_UART_DEV))
+		{
 		}
 		uint16_t fill_len = uart_ll_get_txfifo_len(&TARGET_UART_DEV);
-		if (fill_len > len) {
+		if (fill_len > len)
+		{
 			fill_len = len;
 		}
 		len -= fill_len;
-		if (fill_len > 0) {
+		if (fill_len > 0)
+		{
 			uart_ll_write_txfifo(&TARGET_UART_DEV, data, fill_len);
 		}
 		data += fill_len;
@@ -112,11 +109,14 @@ void IRAM_ATTR uart_write_all(const uint8_t *data, int len)
 
 static void IRAM_ATTR uart_byte_mode(void)
 {
-	if (uart_mode == 1) {
+	if (uart_mode == 1)
+	{
 		return;
 	}
 	uart_mode = 1;
+#ifdef CONFIG_LED_GPIO
 	gpio_set_level(CONFIG_LED_GPIO, 1);
+#endif
 	uart_ll_set_rx_tout(&TARGET_UART_DEV, 20);
 	uart_ll_set_rxfifo_full_thr(&TARGET_UART_DEV, 2);
 	uart_ll_ena_intr_mask(&TARGET_UART_DEV, DEFAULT_UART_MASK);
@@ -125,11 +125,14 @@ static void IRAM_ATTR uart_byte_mode(void)
 
 static void IRAM_ATTR uart_bulk_mode(void)
 {
-	if (uart_mode == 2) {
+	if (uart_mode == 2)
+	{
 		return;
 	}
 	uart_mode = 2;
+#ifdef CONFIG_LED_GPIO
 	gpio_set_level(CONFIG_LED_GPIO, 0);
+#endif
 	// Symbol length is:
 	//      - 1 start bit
 	//		- 8 data bits
@@ -159,20 +162,25 @@ static void IRAM_ATTR console_isr(void *param)
 	uart_irq_count += 1;
 
 	if ((uart_intr_status & UART_INTR_RXFIFO_TOUT) || (uart_intr_status & UART_INTR_RXFIFO_FULL) ||
-	    (uart_intr_status & UART_INTR_CMD_CHAR_DET)) {
+		(uart_intr_status & UART_INTR_CMD_CHAR_DET))
+	{
 		// bytes_read = uart_ll_get_rxfifo_len(&TARGET_UART_DEV);
-		while (TARGET_UART_DEV.mem_rx_status.wr_addr != TARGET_UART_DEV.mem_rx_status.rd_addr) {
+		while (TARGET_UART_DEV.mem_rx_status.wr_addr != TARGET_UART_DEV.mem_rx_status.rd_addr)
+		{
 			bytes_read += 1;
 			char c = (*((volatile uint32_t *)UART_FIFO_REG(CONFIG_TARGET_UART_IDX)));
 			(void)c;
 		}
 		uart_rx_count += bytes_read;
 
-		if (uart_intr_status & UART_INTR_RXFIFO_TOUT) {
+		if (uart_intr_status & UART_INTR_RXFIFO_TOUT)
+		{
 			// UART_ENTER_CRITICAL_ISR(&uart->spinlock);
 			uart_byte_mode();
 			// UART_EXIT_CRITICAL_ISR(&uart->spinlock);
-		} else if (bytes_read >= 2) {
+		}
+		else if (bytes_read >= 2)
+		{
 			// UART_ENTER_CRITICAL_ISR(&uart->spinlock);
 			uart_bulk_mode();
 			// UART_EXIT_CRITICAL_ISR(&uart->spinlock);
@@ -194,13 +202,15 @@ static void IRAM_ATTR console_isr(void *param)
 		// UART_EXIT_CRITICAL_ISR(&uart->spinlock);
 		portBASE_TYPE shouldWake = pdFALSE;
 		// xSemaphoreGiveFromISR(uart_msg_queue.sem, &shouldWake);
-		if (shouldWake) {
+		if (shouldWake)
+		{
 			HPTaskAwoken = pdTRUE;
 		}
 		// uart_ll_clr_intsts_mask(&TARGET_UART_DEV, UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
 	}
 
-	if (uart_intr_status & UART_INTR_RXFIFO_OVF) {
+	if (uart_intr_status & UART_INTR_RXFIFO_OVF)
+	{
 		// When fifo overflows, we reset the fifo.
 		// UART_ENTER_CRITICAL_ISR(&uart->spinlock);
 		uart_ll_rxfifo_rst(&TARGET_UART_DEV);
@@ -209,7 +219,8 @@ static void IRAM_ATTR console_isr(void *param)
 		// uart_ll_clr_intsts_mask(&TARGET_UART_DEV, UART_INTR_RXFIFO_OVF);
 	}
 
-	if (uart_intr_status & UART_INTR_FRAM_ERR) {
+	if (uart_intr_status & UART_INTR_FRAM_ERR)
+	{
 		uart_frame_error_cnt += 1;
 		// UART_ENTER_CRITICAL_ISR(&uart->spinlock);
 		uart_ll_rxfifo_rst(&TARGET_UART_DEV);
@@ -224,29 +235,25 @@ static void IRAM_ATTR console_isr(void *param)
 	// 	uart_intr_status = uart_ll_get_intsts_mask(&TARGET_UART_DEV);
 	// }
 
-	if (HPTaskAwoken == pdTRUE) {
+	if (HPTaskAwoken == pdTRUE)
+	{
 		portYIELD_FROM_ISR();
 	}
 }
 
 static void uart_hw_init(void)
 {
-	uint32_t baud = 115200;
-	extern nvs_handle h_nvs_conf;
-	nvs_get_u32(h_nvs_conf, "uartbaud", &baud);
-
 	uart_config_t uart_config;
 	memset(&uart_config, 0, sizeof(uart_config));
-	uart_config.baud_rate = baud;
+	uart_config.baud_rate = CONFIG_UART_BAUD;
 	uart_config.data_bits = UART_DATA_8_BITS;
 	uart_config.parity = UART_PARITY_DISABLE;
 	uart_config.stop_bits = UART_STOP_BITS_1;
 	uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
 
 	ESP_ERROR_CHECK(uart_param_config(CONFIG_TARGET_UART_IDX, &uart_config));
-	uart_set_baudrate(CONFIG_TARGET_UART_IDX, baud);
 	ESP_ERROR_CHECK(uart_set_pin(CONFIG_TARGET_UART_IDX, CONFIG_UART_TX_GPIO, CONFIG_UART_RX_GPIO,
-				     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+								 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
 	uart_sclk_t src_clk;
 	uart_ll_get_sclk(&TARGET_UART_DEV, &src_clk);
@@ -258,7 +265,7 @@ static void uart_hw_init(void)
 	uart_ll_disable_intr_mask(&TARGET_UART_DEV, UART_LL_INTR_MASK);
 	uart_ll_clr_intsts_mask(&TARGET_UART_DEV, UART_LL_INTR_MASK);
 	ESP_ERROR_CHECK(esp_intr_alloc(PERIPH_UART_IRQ, ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL1, console_isr,
-				       &uart_context[CONFIG_TARGET_UART_IDX], &console_isr_handle));
+								   &uart_context[CONFIG_TARGET_UART_IDX], &console_isr_handle));
 
 	const uart_intr_config_t uart_intr = {
 		.intr_enable_mask = UART_RXFIFO_FULL_INT_ENA_M | UART_FRM_ERR_INT_ENA_M | UART_RXFIFO_OVF_INT_ENA_M
@@ -277,79 +284,16 @@ static void uart_hw_init(void)
 static void IRAM_ATTR uart_rx_task(void *parameters)
 {
 	(void)parameters;
-	uint8_t buf[1024];
-	int ret;
-	int count;
 
 	uart_hw_init();
 
-	while (1) {
+	while (1)
+	{
 		vTaskDelay(portMAX_DELAY);
-	// 	// Consider adding a critical section here
-	// 	if (CBUF_IsEmpty(uart_msg_queue)) {
-	// 		xSemaphoreTake(uart_msg_queue.sem, portMAX_DELAY);
-	// 	}
-	// 	count = 0;
-	// 	while ((count < sizeof(buf)) && !CBUF_IsEmpty(uart_msg_queue)) {
-	// 		char c = CBUF_Pop(uart_msg_queue);
-	// 		buf[count++] = c;
-	// 	}
 
-	// 	if (count <= 0) {
-	// 		continue;
-	// 	}
-	// 	if (count > sizeof(buf)) {
-	// 		ESP_LOGE(__func__, "count is %d, which is larger than buf size %d", count, sizeof(buf));
-	// 		assert(count <= sizeof(buf));
-	// 	}
-	// 	uart_rx_count += count;
-
-	// 	// // Broadcast the new buffer to all connected websocket clients
-	// 	// http_term_broadcast_data(buf, count);
-
-	// 	// // If there's a TCP client connected, send data there
-	// 	// if (tcp_client_sock) {
-	// 	// 	// ESP_LOGI(__func__, "tcp sending %d bytes (first byte: %02x (%c))", count, buf[0], buf[0]);
-	// 	// 	ret = send(tcp_client_sock, buf, count, 0);
-	// 	// 	if (ret > 0) {
-	// 	// 		uart_rx_data_relay += ret;
-	// 	// 	}
-	// 	// 	// ESP_LOGI(__func__, "done sending, return value: %d, running count: %d bytes", ret,
-	// 	// 	// 	 bytes_written);
-	// 	// 	if (ret < 0) {
-	// 	// 		ESP_LOGE(__func__, "tcp send() failed (%s)", strerror(errno));
-	// 	// 		close(tcp_client_sock);
-	// 	// 		tcp_client_sock = 0;
-	// 	// 	} else if (ret != count) {
-	// 	// 		ESP_LOGE(__func__, "tcp send() wanted to send %d bytes, but only sent %d", count, ret);
-	// 	// 	}
-	// 	// }
-
-	// 	// // If there's a UDP client connected, broadcast to that host
-	// 	// if (udp_peer_addr.sin_addr.s_addr) {
-	// 	// 	ret = sendto(udp_serv_sock, buf, count, MSG_DONTWAIT, (struct sockaddr *)&udp_peer_addr,
-	// 	// 		     sizeof(udp_peer_addr));
-	// 	// 	if (ret < 0) {
-	// 	// 		ESP_LOGE(__func__, "udp send() failed (%s)", strerror(errno));
-	// 	// 		udp_peer_addr.sin_addr.s_addr = 0;
-	// 	// 	}
-	// 	// }
+		// Ordinarily, this would contain code to unload a queue that was filled in by the
+		// UART top-half.
 	}
-}
-
-void uart_send_break(void)
-{
-	uart_wait_tx_done(CONFIG_TARGET_UART_IDX, 10);
-
-	uint32_t baud;
-	uart_get_baudrate(CONFIG_TARGET_UART_IDX, &baud);    // save current baudrate
-	uart_set_baudrate(CONFIG_TARGET_UART_IDX, baud / 2); // set half the baudrate
-	const uint8_t b = 0x00;
-	uart_write_all(&b, 1);
-	while (!uart_ll_is_tx_idle(&TARGET_UART_DEV)) {
-	}
-	uart_wait_tx_done(CONFIG_TARGET_UART_IDX, 10);
-	uart_set_baudrate(CONFIG_TARGET_UART_IDX, baud); // restore baudrate
 }
 
 void uart_init(void)
